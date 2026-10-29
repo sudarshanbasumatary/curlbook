@@ -1,0 +1,15 @@
+name: curlbook
+
+services:
+  curlbook:
+    build: .
+    image: curlbook:latest
+    container_name: curlbook
+    ports:
+      - "127.0.0.1:${CURLBOOK_PORT:-8787}:8080"
+    volumes:
+      - ./data:/data
+    extra_hosts:
+      # lets requests reach services running on your machine via http://host.docker.internal:<port>
+      - "host.docker.internal:host-gateway"
+    restart: unless-stopped

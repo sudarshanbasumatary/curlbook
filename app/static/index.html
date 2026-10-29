@@ -1,0 +1,200 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Curlbook</title>
+  <link rel="icon" type="image/svg+xml" href="/static/logo-icon.svg" />
+  <link rel="stylesheet" href="/static/style.css" />
+</head>
+<body>
+  <header class="topbar">
+    <img class="brand" src="/static/logo-wordmark.svg" alt="Curlbook" title="Curlbook" />
+    <div class="topbar-actions">
+      <button id="btn-new-request" class="btn">+ Request</button>
+      <button id="btn-new-collection" class="btn">+ Collection</button>
+      <button id="btn-import" class="btn btn-accent">Import curl</button>
+      <button id="btn-globals" class="btn">Globals <span id="globals-count" class="pill">0</span></button>
+    </div>
+  </header>
+
+  <div class="layout">
+    <!-- Sidebar -->
+    <aside class="sidebar">
+      <input id="search" class="input" type="search" placeholder="Search requests..." />
+      <div id="collections" class="collections"></div>
+    </aside>
+
+    <!-- Main -->
+    <main class="main">
+      <div id="empty-state" class="empty-state">
+        <img class="hero-logo" src="/static/logo.svg" alt="Curlbook" />
+        <h2>No request open</h2>
+        <p>Select a request from the sidebar, create a new one, or import a curl command.</p>
+        <div class="row gap">
+          <button class="btn" data-action="new-request">+ New request</button>
+          <button class="btn btn-accent" data-action="import">Import curl</button>
+        </div>
+      </div>
+
+      <section id="editor" class="editor hidden">
+        <div class="row gap meta-row">
+          <input id="req-name" class="input name-input" placeholder="Request name" />
+          <label class="muted small">in</label>
+          <select id="req-collection" class="input select"></select>
+          <span id="dirty-indicator" class="dirty hidden" title="Unsaved changes">&#9679; unsaved</span>
+          <div class="spacer"></div>
+          <button id="btn-save" class="btn" title="Ctrl/Cmd + S">Save</button>
+        </div>
+
+        <div class="row request-line">
+          <select id="req-method" class="input select method-select">
+            <option>GET</option><option>POST</option><option>PUT</option><option>PATCH</option>
+            <option>DELETE</option><option>HEAD</option><option>OPTIONS</option>
+          </select>
+          <input id="req-url" class="input url-input mono" placeholder="https://api.example.com/path  — use {{variables}}" spellcheck="false" />
+          <button id="btn-send" class="btn btn-primary" title="Ctrl/Cmd + Enter">Send</button>
+        </div>
+        <div id="var-chips" class="var-chips"></div>
+
+        <nav class="tabs" data-tabgroup="req">
+          <button class="tab active" data-tab="headers">Headers <span id="headers-count" class="pill"></span></button>
+          <button class="tab" data-tab="body">Body</button>
+          <button class="tab" data-tab="options">Options</button>
+          <button class="tab" data-tab="extract">Extract <span id="extract-count" class="pill"></span></button>
+          <button class="tab" data-tab="raw">Raw curl</button>
+        </nav>
+
+        <div class="tab-panels" data-tabgroup="req">
+          <div class="tab-panel active" data-panel="headers">
+            <table class="kv-table">
+              <thead><tr><th></th><th>Key</th><th>Value</th><th></th></tr></thead>
+              <tbody id="headers-body"></tbody>
+            </table>
+            <button id="btn-add-header" class="btn btn-small">+ Add header</button>
+          </div>
+
+          <div class="tab-panel" data-panel="body">
+            <div class="row gap toolbar">
+              <button id="btn-format-body" class="btn btn-small">Format JSON</button>
+              <span class="muted small">Raw request body. <code>{{var}}</code> placeholders are substituted before sending.</span>
+            </div>
+            <textarea id="req-body" class="input textarea mono" spellcheck="false" placeholder='{"key": "{{value}}"}'></textarea>
+          </div>
+
+          <div class="tab-panel" data-panel="options">
+            <div class="options-grid">
+              <label class="check"><input type="checkbox" id="opt-insecure" /> Insecure &mdash; skip TLS verification (<code>-k</code>)</label>
+              <label class="check"><input type="checkbox" id="opt-follow" /> Follow redirects (<code>-L</code>)</label>
+              <label class="row gap">Timeout (seconds, <code>-m</code>) <input type="number" min="1" id="opt-timeout" class="input input-small" /></label>
+            </div>
+          </div>
+
+          <div class="tab-panel" data-panel="extract">
+            <p class="muted small">
+              After each send, these rules pull values from the response into global variables.
+              Body paths look like <code>data.items[0].id</code>; for headers enter the header name.
+            </p>
+            <table class="kv-table">
+              <thead><tr><th>Global variable</th><th>Source</th><th>Path / header name</th><th></th></tr></thead>
+              <tbody id="extract-body"></tbody>
+            </table>
+            <button id="btn-add-extract" class="btn btn-small">+ Add rule</button>
+          </div>
+
+          <div class="tab-panel" data-panel="raw">
+            <div class="row gap toolbar">
+              <button id="btn-raw-apply" class="btn btn-small btn-accent">Apply to form</button>
+              <button id="btn-raw-refresh" class="btn btn-small">Regenerate from form</button>
+              <button id="btn-raw-copy" class="btn btn-small">Copy</button>
+              <button id="btn-raw-copy-resolved" class="btn btn-small">Copy with variables resolved</button>
+            </div>
+            <textarea id="req-raw" class="input textarea mono" spellcheck="false" placeholder="Paste or edit a curl command here, then click 'Apply to form'"></textarea>
+          </div>
+        </div>
+
+        <!-- Response -->
+        <section class="response">
+          <div class="row gap response-head">
+            <strong>Response</strong>
+            <span id="resp-status" class="status"></span>
+            <span id="resp-meta" class="muted small"></span>
+          </div>
+          <div id="resp-alerts"></div>
+          <nav class="tabs" data-tabgroup="resp">
+            <button class="tab active" data-tab="rbody">Body</button>
+            <button class="tab" data-tab="rheaders">Headers</button>
+            <button class="tab" data-tab="rsent">Sent curl</button>
+            <button class="tab" data-tab="rextract">Extracted <span id="rextract-count" class="pill"></span></button>
+          </nav>
+          <div class="tab-panels" data-tabgroup="resp">
+            <div class="tab-panel active" data-panel="rbody">
+              <div class="row gap toolbar extract-bar">
+                <span class="small muted">Save to global:</span>
+                <input id="qx-var" class="input input-small" placeholder="varName" />
+                <select id="qx-source" class="input select">
+                  <option value="body">body</option><option value="header">header</option><option value="status">status</option>
+                </select>
+                <input id="qx-path" class="input mono qx-path" placeholder="data.token" />
+                <button id="btn-qx-preview" class="btn btn-small">Preview</button>
+                <button id="btn-qx-save" class="btn btn-small btn-accent">Save global</button>
+                <button id="btn-qx-rule" class="btn btn-small" title="Add as extraction rule to this request">+ As rule</button>
+                <span id="qx-result" class="mono small qx-result"></span>
+              </div>
+              <pre id="resp-body" class="code mono"></pre>
+            </div>
+            <div class="tab-panel" data-panel="rheaders">
+              <table class="kv-table readonly"><tbody id="resp-headers"></tbody></table>
+            </div>
+            <div class="tab-panel" data-panel="rsent">
+              <div class="row gap toolbar"><button id="btn-copy-sent" class="btn btn-small">Copy</button></div>
+              <pre id="resp-sent" class="code mono"></pre>
+            </div>
+            <div class="tab-panel" data-panel="rextract">
+              <table class="kv-table readonly"><tbody id="resp-extract"></tbody></table>
+            </div>
+          </div>
+        </section>
+      </section>
+    </main>
+  </div>
+
+  <!-- Import modal -->
+  <div id="modal-import" class="modal hidden">
+    <div class="modal-card">
+      <div class="modal-head"><h3>Import curl</h3><button class="icon-btn" data-close>&times;</button></div>
+      <textarea id="import-curl" class="input textarea mono" spellcheck="false" placeholder="curl 'https://api.example.com/login' -H 'Content-Type: application/json' --data-raw '{&quot;user&quot;:&quot;me&quot;}'"></textarea>
+      <div class="row gap">
+        <input id="import-name" class="input" placeholder="Name (optional)" />
+        <select id="import-collection" class="input select"></select>
+      </div>
+      <div class="modal-foot">
+        <button class="btn" data-close>Cancel</button>
+        <button id="btn-import-go" class="btn btn-accent">Parse &amp; save</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Globals modal -->
+  <div id="modal-globals" class="modal hidden">
+    <div class="modal-card wide">
+      <div class="modal-head"><h3>Global variables</h3><button class="icon-btn" data-close>&times;</button></div>
+      <p class="muted small">Use as <code>{{name}}</code> in URL, headers, or body. Built-ins: <code>{{$uuid}}</code>, <code>{{$timestamp}}</code>, <code>{{$timestampMs}}</code>, <code>{{$randomInt}}</code>.</p>
+      <div class="globals-scroll">
+        <table class="kv-table">
+          <thead><tr><th>Name</th><th>Value</th><th></th></tr></thead>
+          <tbody id="globals-body"></tbody>
+        </table>
+      </div>
+      <button id="btn-add-global" class="btn btn-small">+ Add variable</button>
+      <div class="modal-foot">
+        <button class="btn" data-close>Cancel</button>
+        <button id="btn-globals-save" class="btn btn-accent">Save</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="toasts" class="toasts"></div>
+  <script src="/static/app.js"></script>
+</body>
+</html>
