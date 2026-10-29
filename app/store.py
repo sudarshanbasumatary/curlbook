@@ -5,6 +5,8 @@ import tempfile
 import threading
 import uuid
 
+from tags import normalize_tags
+
 DATA_DIR = os.environ.get("CURLBOOK_DATA_DIR", "/data")
 STORE_PATH = os.path.join(DATA_DIR, "store.json")
 
@@ -19,6 +21,7 @@ def _default_store() -> dict:
     return {
         "collections": [{"id": new_id(), "name": "Default", "requests": []}],
         "globals": {},
+        "tags": {},
     }
 
 
@@ -32,6 +35,7 @@ def default_request(name: str = "New Request") -> dict:
         "body": "",
         "options": {"insecure": False, "followRedirects": True, "timeout": 30},
         "extractions": [],
+        "tags": [],
     }
 
 
@@ -57,6 +61,7 @@ def normalize_request(req: dict) -> dict:
         for e in (out.get("extractions") or [])
     ]
     out["method"] = str(out.get("method") or "GET").upper()
+    out["tags"] = normalize_tags(out.get("tags"))
     out.pop("rawCurl", None)
     return out
 
@@ -85,6 +90,7 @@ def load() -> dict:
             raise StoreCorruptError(f"{STORE_PATH} is not valid JSON ({e}). Fix or remove the file.") from e
         data.setdefault("collections", [])
         data.setdefault("globals", {})
+        data.setdefault("tags", {})
         return data
 
 

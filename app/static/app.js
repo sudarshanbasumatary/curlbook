@@ -50,12 +50,12 @@
 
   const newRequest = () => ({
     id: null, name: "New Request", method: "GET", url: "", headers: [], body: "",
-    options: { insecure: false, followRedirects: true, timeout: 30 }, extractions: [],
+    options: { insecure: false, followRedirects: true, timeout: 30 }, extractions: [], tags: [],
   });
 
   // -------------------------------------------------------------- state --
   const state = {
-    store: { collections: [], globals: {} },
+    store: { collections: [], globals: {}, tags: {} },
     current: null,
     currentId: null,
     collectionId: null,
@@ -70,10 +70,13 @@
 
   async function reloadStore() {
     state.store = await api("GET", "/api/store");
+    state.store.tags = state.store.tags || {};
     renderSidebar();
     renderCollectionSelects();
     renderGlobalsCount();
     renderVarChips();
+    renderTagSuggestions();
+    if (state.current) renderTags();
   }
 
   function setDirty(v = true) {
@@ -81,22 +84,78 @@
     $("#dirty-indicator").classList.toggle("hidden", !v);
   }
 
+  // --------------------------------------------------------------- tags --
+  const TAG_FALLBACK_COLOR = "#8b93a5";
+  const tagColor = (t) => state.store.tags[t] || TAG_FALLBACK_COLOR;
+
+  /** Mirror of the server's normalisation: '  Auth Flow ' -> 'auth-flow'. */
+  function normalizeTag(raw) {
+    return String(raw || "").trim().replace(/^#+/, "").toLowerCase()
+      .replace(/\s+/g, "-").replace(/[^\p{L}\p{N}_\-./:+]/gu, "").replace(/^-+|-+$/g, "").slice(0, 32);
+  }
+
+  function tagChip(tag, { small = false, removable = false, recolorable = false, filter = false, active = false } = {}) {
+    const color = tagColor(tag);
+    const dot = recolorable
+      ? `<button type="button" class="tag-dot" data-recolor="${esc(tag)}" title="Change colour of '${esc(tag)}'"></button>`
+      : `<span class="tag-dot"></span>`;
+    const x = removable ? `<button type="button" class="tag-x" data-remove-tag="${esc(tag)}" title="Remove tag">&times;</button>` : "";
+    const el = filter ? "button" : "span";
+    const attrs = filter ? ` type="button" data-action="filter-tag" data-tag="${esc(tag)}" title="Show requests tagged '${esc(tag)}'"` : "";
+    return `<${el} class="tag${small ? " tag-sm" : ""}${active ? " active" : ""}" style="--tag:${esc(color)}"${attrs}>${dot}<span class="tag-name">${esc(tag)}</span>${x}</${el}>`;
+  }
+
+  /** Parse the search box into terms. `tag:x` / `#x` are exact tag filters; other words are free text. */
+  function parseSearch(q) {
+    return q.trim().toLowerCase().split(/\s+/).filter(Boolean).map((term) => {
+      const m = term.match(/^(?:tag:|#)(.*)$/);
+      return m ? { tag: normalizeTag(m[1]) } : { text: term };
+    }).filter((t) => t.text || t.tag);
+  }
+
+  function requestMatches(r, col, terms) {
+    const tags = r.tags || [];
+    return terms.every((t) => t.tag
+      ? tags.includes(t.tag)
+      : r.name.toLowerCase().includes(t.text) || (r.url || "").toLowerCase().includes(t.text)
+        || r.method.toLowerCase() === t.text || col.name.toLowerCase().includes(t.text)
+        || tags.some((tag) => tag.includes(t.text)));
+  }
+
+  function activeTagFilters() {
+    return new Set(parseSearch(state.search).filter((t) => t.tag).map((t) => t.tag));
+  }
+
+  function setSearch(value) {
+    state.search = value;
+    $("#search").value = value;
+    renderSidebar();
+  }
+
+  function toggleTagFilter(tag) {
+    const terms = state.search.trim().split(/\s+/).filter(Boolean);
+    const isThis = (t) => /^(tag:|#)/i.test(t) && normalizeTag(t.replace(/^(tag:|#)/i, "")) === tag;
+    const next = terms.some(isThis) ? terms.filter((t) => !isThis(t)) : [...terms, `tag:${tag}`];
+    setSearch(next.join(" "));
+  }
+
   // ------------------------------------------------------------ sidebar --
   function renderSidebar() {
     const root = $("#collections");
-    const q = state.search.trim().toLowerCase();
+    const terms = parseSearch(state.search);
+    const searching = terms.length > 0;
+    const activeTags = activeTagFilters();
     const parts = [];
     for (const col of state.store.collections) {
-      const reqs = col.requests.filter((r) =>
-        !q || r.name.toLowerCase().includes(q) || (r.url || "").toLowerCase().includes(q) || r.method.toLowerCase() === q);
-      if (q && !reqs.length && !col.name.toLowerCase().includes(q)) continue;
-      const collapsed = !q && state.collapsed.has(col.id);
+      const reqs = col.requests.filter((r) => !searching || requestMatches(r, col, terms));
+      if (searching && !reqs.length) continue;
+      const collapsed = !searching && state.collapsed.has(col.id);
       parts.push(`
         <div class="collection" data-cid="${col.id}">
           <div class="collection-head" data-action="toggle-col">
             <span class="caret">${collapsed ? "&#9656;" : "&#9662;"}</span>
             <span class="col-name">${esc(col.name)}</span>
-            <span class="pill">${col.requests.length}</span>
+            <span class="pill">${searching ? `${reqs.length}/${col.requests.length}` : col.requests.length}</span>
             <span class="col-actions">
               <button class="icon-btn" data-action="col-add" title="New request in collection">+</button>
               <button class="icon-btn" data-action="col-rename" title="Rename">&#9998;</button>
@@ -107,7 +166,10 @@
             ${reqs.map((r) => `
               <div class="req-item ${r.id === state.currentId ? "active" : ""}" data-rid="${r.id}" data-action="open-req" title="${esc(r.url)}">
                 <span class="method m-${esc(r.method)}">${esc(r.method)}</span>
-                <span class="req-name">${esc(r.name)}</span>
+                <span class="req-main">
+                  <span class="req-name">${esc(r.name)}</span>
+                  ${(r.tags || []).length ? `<span class="req-tags">${r.tags.map((t) => tagChip(t, { small: true, filter: true, active: activeTags.has(t) })).join("")}</span>` : ""}
+                </span>
                 <span class="req-actions">
                   <button class="icon-btn" data-action="req-dup" title="Duplicate">&#10697;</button>
                   <button class="icon-btn danger" data-action="req-delete" title="Delete">&times;</button>
@@ -116,7 +178,9 @@
           </div>
         </div>`);
     }
-    root.innerHTML = parts.join("") || `<div class="muted small pad">No collections. Create one with "+ Collection".</div>`;
+    root.innerHTML = parts.join("") || (searching
+      ? `<div class="muted small pad">No requests match <code>${esc(state.search.trim())}</code>.</div>`
+      : `<div class="muted small pad">No collections. Create one with "+ Collection".</div>`);
   }
 
   $("#collections").addEventListener("click", async (e) => {
@@ -128,6 +192,8 @@
     e.stopPropagation();
     try {
       switch (action) {
+        case "filter-tag":
+          toggleTagFilter(btn.dataset.tag); break;
         case "toggle-col":
           state.collapsed.has(cid) ? state.collapsed.delete(cid) : state.collapsed.add(cid);
           saveCollapsed(); renderSidebar(); break;
@@ -218,6 +284,7 @@
   }
 
   function loadIntoEditor(req, rid, cid) {
+    req.tags = req.tags || [];
     state.current = req;
     state.currentId = rid;
     state.collectionId = cid;
@@ -244,6 +311,7 @@
     renderHeaders();
     renderExtractions();
     renderVarChips();
+    renderTags();
     updateMethodColor();
   }
 
@@ -258,6 +326,86 @@
     renderVarChips();
     if (activeTab("req") === "raw") refreshRawDebounced();
   }
+
+  // ------------------------------------------------------- editor: tags --
+  function renderTags() {
+    if (!state.current) return;
+    $("#req-tags").innerHTML = state.current.tags.map((t) => tagChip(t, { removable: true, recolorable: true })).join("");
+    renderTagSuggestions();
+  }
+
+  function renderTagSuggestions() {
+    const have = new Set(state.current?.tags || []);
+    $("#tag-suggestions").innerHTML = Object.keys(state.store.tags || {}).sort()
+      .filter((t) => !have.has(t)).map((t) => `<option value="${esc(t)}"></option>`).join("");
+  }
+
+  async function addTags(text) {
+    if (!state.current) return;
+    const fresh = String(text).split(",").map(normalizeTag).filter((t) => t && !state.current.tags.includes(t));
+    if (!fresh.length) return;
+    if (state.current.tags.length + fresh.length > 20) { toast("A request can have at most 20 tags", "warn"); return; }
+    state.current.tags.push(...fresh);
+    setDirty(true);
+    renderTags();
+    // reserve a unique colour for brand-new tags so the chip shows its final colour right away
+    for (const t of fresh.filter((t) => !state.store.tags[t])) {
+      try {
+        const res = await api("POST", "/api/tags", { name: t });
+        state.store.tags = res.tags;
+      } catch (err) { toast(err.message, "err"); }
+    }
+    renderTags();
+  }
+
+  function removeTag(tag) {
+    state.current.tags = state.current.tags.filter((t) => t !== tag);
+    setDirty(true);
+    renderTags();
+  }
+
+  const tagInput = $("#tag-input");
+  tagInput.addEventListener("keydown", (e) => {
+    if (e.key === "Enter" || e.key === ",") {
+      e.preventDefault();
+      addTags(tagInput.value); tagInput.value = "";
+    } else if (e.key === "Tab" && tagInput.value.trim()) {
+      addTags(tagInput.value); tagInput.value = "";
+    } else if (e.key === "Backspace" && !tagInput.value && state.current?.tags.length) {
+      removeTag(state.current.tags[state.current.tags.length - 1]);
+    }
+  });
+  tagInput.addEventListener("input", (e) => {
+    // picking a datalist suggestion fires an input event without a keyboard inputType
+    if (!e.inputType || e.inputType === "insertReplacementText") { addTags(tagInput.value); tagInput.value = ""; }
+    else if (tagInput.value.includes(",")) { addTags(tagInput.value); tagInput.value = ""; }
+  });
+  tagInput.addEventListener("blur", () => { if (tagInput.value.trim()) { addTags(tagInput.value); tagInput.value = ""; } });
+  $("#tag-editor").addEventListener("click", (e) => {
+    if (e.target === e.currentTarget || e.target.id === "req-tags") tagInput.focus();
+  });
+
+  const colorPicker = $("#tag-color-picker");
+  $("#req-tags").addEventListener("click", (e) => {
+    const rm = e.target.closest("[data-remove-tag]");
+    if (rm) { removeTag(rm.dataset.removeTag); return; }
+    const dot = e.target.closest("[data-recolor]");
+    if (dot) {
+      colorPicker.dataset.tag = dot.dataset.recolor;
+      colorPicker.value = tagColor(dot.dataset.recolor);
+      if (colorPicker.showPicker) colorPicker.showPicker(); else colorPicker.click();
+    }
+  });
+  colorPicker.addEventListener("change", async () => {
+    const tag = colorPicker.dataset.tag;
+    if (!tag || colorPicker.value.toLowerCase() === tagColor(tag).toLowerCase()) return;
+    try {
+      const res = await api("PUT", `/api/tags/${encodeURIComponent(tag)}`, { color: colorPicker.value });
+      state.store.tags = res.tags;
+      renderTags(); renderSidebar();
+      toast(`Tag '${tag}' recoloured`, "ok", 1500);
+    } catch (err) { toast(err.message, "err", 5000); }
+  });
 
   // simple bindings
   $("#req-name").addEventListener("input", (e) => { state.current.name = e.target.value; setDirty(true); });
@@ -632,7 +780,7 @@
   function openImport() {
     renderCollectionSelects();
     if (state.collectionId) $("#import-collection").value = state.collectionId;
-    $("#import-curl").value = ""; $("#import-name").value = "";
+    $("#import-curl").value = ""; $("#import-name").value = ""; $("#import-tags").value = "";
     openModal("#modal-import");
     $("#import-curl").focus();
   }
@@ -643,6 +791,7 @@
       if (!state.store.collections.length) await api("POST", "/api/collections", { name: "Default" });
       const res = await api("POST", "/api/import", {
         curl: $("#import-curl").value, name: $("#import-name").value, collectionId: $("#import-collection").value,
+        tags: $("#import-tags").value.split(",").map(normalizeTag).filter(Boolean),
       });
       closeModal($("#modal-import"));
       await reloadStore();
@@ -718,6 +867,25 @@
     else if (e.key === "Escape") $$(".modal:not(.hidden)").forEach((m) => m.classList.add("hidden"));
   });
   window.addEventListener("beforeunload", (e) => { if (state.dirty) { e.preventDefault(); e.returnValue = ""; } });
+
+  // ---------------------------------------------------------------- theme --
+  const THEME_KEY = "curlbook.theme";
+  function applyTheme(theme) {
+    const dark = theme === "dark";
+    if (dark) document.documentElement.dataset.theme = "dark";
+    else delete document.documentElement.dataset.theme;
+    const btn = $("#btn-theme");
+    const label = dark ? "Switch to light mode" : "Switch to dark mode";
+    btn.title = label;
+    btn.setAttribute("aria-label", label);
+    btn.setAttribute("aria-pressed", String(dark));
+  }
+  $("#btn-theme").addEventListener("click", () => {
+    const next = document.documentElement.dataset.theme === "dark" ? "light" : "dark";
+    applyTheme(next);
+    try { localStorage.setItem(THEME_KEY, next); } catch (_) { /* ignore */ }
+  });
+  applyTheme(document.documentElement.dataset.theme === "dark" ? "dark" : "light");
 
   // ---------------------------------------------------------------- init --
   reloadStore().catch((err) => toast("Failed to load store: " + err.message, "err", 8000));

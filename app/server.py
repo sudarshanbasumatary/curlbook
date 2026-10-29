@@ -8,6 +8,7 @@ import urllib3
 from flask import Flask, jsonify, request, send_from_directory
 
 import store
+import tags as tagmod
 from curl_builder import build_curl
 from curl_parser import CurlParseError, parse_curl
 from variables import ExtractError, extract, resolve_request
@@ -32,6 +33,11 @@ def _curl_err(e):
 @app.errorhandler(store.StoreCorruptError)
 def _store_err(e):
     return bad(str(e), 500)
+
+
+@app.errorhandler(tagmod.TagError)
+def _tag_err(e):
+    return bad(str(e), 409 if "already used" in str(e) else 400)
 
 
 @app.get("/")
@@ -74,6 +80,7 @@ def delete_collection(cid):
         data["collections"] = [c for c in data["collections"] if c["id"] != cid]
         if len(data["collections"]) == before:
             return bad("Collection not found", 404)
+        tagmod.sync_tags(data)
     return jsonify({"ok": True})
 
 
@@ -88,7 +95,9 @@ def create_request():
         if not col:
             return bad("Collection not found", 404)
         col["requests"].append(req)
-    return jsonify({"request": req, "collectionId": cid}), 201
+        tagmod.sync_tags(data)
+        tag_colors = data["tags"]
+    return jsonify({"request": req, "collectionId": cid, "tags": tag_colors}), 201
 
 
 @app.put("/api/requests/<rid>")
@@ -109,7 +118,9 @@ def update_request(rid):
             target["requests"].append(req)
         else:
             col["requests"][idx] = req
-    return jsonify({"request": req, "collectionId": target_cid})
+        tagmod.sync_tags(data)
+        tag_colors = data["tags"]
+    return jsonify({"request": req, "collectionId": target_cid, "tags": tag_colors})
 
 
 @app.post("/api/requests/<rid>/duplicate")
@@ -131,7 +142,30 @@ def delete_request(rid):
         if not existing:
             return bad("Request not found", 404)
         col["requests"].pop(idx)
+        tagmod.sync_tags(data)
     return jsonify({"ok": True})
+
+
+# ----------------------------------------------------------------- tags ----
+@app.post("/api/tags")
+def api_ensure_tag():
+    """Reserve a unique colour for a tag (used when a tag is added in the editor before saving)."""
+    tag = tagmod.normalize_tag((request.json or {}).get("name"))
+    if not tag:
+        return bad("Invalid tag name")
+    with store.Transaction() as data:
+        color = tagmod.ensure_tag(data, tag)
+        tag_colors = data["tags"]
+    return jsonify({"tag": tag, "color": color, "tags": tag_colors})
+
+
+@app.put("/api/tags/<path:name>")
+def api_set_tag_color(name):
+    with store.Transaction() as data:
+        tag = tagmod.normalize_tag(name)
+        color = tagmod.set_color(data, tag, (request.json or {}).get("color"))
+        tag_colors = data["tags"]
+    return jsonify({"tag": tag, "color": color, "tags": tag_colors})
 
 
 @app.put("/api/globals")
@@ -182,6 +216,7 @@ def api_import():
     name = (payload.get("name") or "").strip()
     if name:
         req["name"] = name
+    req["tags"] = payload.get("tags") or []
     req = store.normalize_request(req)
     with store.Transaction() as data:
         col = store.find_collection(data, payload.get("collectionId"))
@@ -190,6 +225,7 @@ def api_import():
                 data["collections"].append({"id": store.new_id(), "name": "Default", "requests": []})
             col = data["collections"][0]
         col["requests"].append(req)
+        tagmod.sync_tags(data)
     return jsonify({"request": req, "collectionId": col["id"], "warnings": warnings}), 201
 
 
