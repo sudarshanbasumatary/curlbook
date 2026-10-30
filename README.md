@@ -67,18 +67,22 @@ Keyboard: `Ctrl/Cmd+Enter` send, `Ctrl/Cmd+S` save, `Esc` close dialogs.
 
 ## Calling services on your host
 
-Requests run from inside the container, so `localhost` refers to the container.
-Use `http://host.docker.internal:<port>` instead (already mapped in `docker-compose.yml`).
+Requests run from inside the container, where `localhost` would be the container itself (and port
+8080 is curlbook's own server). So the Docker image sets `CURLBOOK_LOCALHOST_ALIAS=host.docker.internal`:
+URLs pointing at `localhost`, `127.0.0.1`, `::1`, `0.0.0.0` or `*.localhost` are sent to your machine
+instead, with the original `Host` header kept. A copied curl therefore behaves the same in your terminal
+and in the UI. Set `CURLBOOK_LOCALHOST_ALIAS=` (empty) to disable this.
 Tip: keep the base URL in a global such as `{{baseUrl}}` so switching hosts is a one-line change.
 
 ## Configuration
 
-| Env var                   | Default    | Description                          |
-|---------------------------|------------|--------------------------------------|
-| `CURLBOOK_DATA_DIR`       | `/data`    | Directory holding `store.json`       |
-| `CURLBOOK_MAX_BODY_BYTES` | `10485760` | Max response body size kept          |
-| `PORT`                    | `8080`     | Listen port inside the container     |
-| `CURLBOOK_PORT`           | `8787`     | Host port published by compose       |
+| Env var                    | Default (Docker)       | Description                                    |
+|----------------------------|------------------------|------------------------------------------------|
+| `CURLBOOK_DATA_DIR`        | `/data`                | Directory holding `store.json`                 |
+| `CURLBOOK_MAX_BODY_BYTES`  | `10485760`             | Max response body size kept                    |
+| `CURLBOOK_LOCALHOST_ALIAS` | `host.docker.internal` | Host that loopback URLs are redirected to      |
+| `PORT`                     | `8080`                 | Listen port inside the container               |
+| `CURLBOOK_PORT`            | `8787`                 | Host port published by compose                 |
 
 ## Logo
 

@@ -640,6 +640,7 @@
     clearResponse();
     const alerts = [];
     if (res.missing?.length) alerts.push(`<div class="alert warn">Undefined variables sent literally: ${res.missing.map((m) => `<code>{{${esc(m)}}}</code>`).join(" ")}</div>`);
+    if (res.rewrittenUrl) alerts.push(`<div class="alert info">Sent to your machine via <code>${esc(res.rewrittenUrl)}</code> — inside Docker, <code>localhost</code> is the container itself.</div>`);
     if (res.error) alerts.push(`<div class="alert err">${esc(res.error)}</div>`);
     if (res.truncated) alerts.push(`<div class="alert warn">Response body truncated.</div>`);
     $("#resp-alerts").innerHTML = alerts.join("");
@@ -846,6 +847,13 @@
   });
 
   // -------------------------------------------------------- top buttons --
+  $("#brand-home").addEventListener("click", (e) => {
+    // let Cmd/Ctrl/Shift/middle-click open a new tab as usual
+    if (e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
+    e.preventDefault();
+    if (!state.current || !confirmDiscard()) return;
+    closeEditor();
+  });
   $("#btn-new-request").addEventListener("click", () => startNewRequest());
   $("#btn-new-collection").addEventListener("click", async () => {
     const name = prompt("Collection name", "New Collection");

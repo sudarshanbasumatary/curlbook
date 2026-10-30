@@ -76,7 +76,7 @@
 .tint-ok, .chip.ok, .s-ok { --tint: var(--ok); }
 .tint-err, .chip.missing, .s-err, .alert.err { --tint: var(--err); }
 .tint-warn, .s-redirect, .alert.warn { --tint: var(--warn); }
-.chip.builtin { --tint: var(--info); }
+.chip.builtin, .alert.info { --tint: var(--info); }
 
 /* ============================================================= base === */
 * { box-sizing: border-box; }
@@ -109,7 +109,9 @@ code { background: var(--bg3); padding: 1px 4px; border-radius: 3px; }
   background: var(--bg2);
   border-bottom: 1px solid var(--border);
 }
-.brand-wrap { display: flex; align-items: center; }
+.brand-wrap { display: flex; align-items: center; border-radius: 6px; cursor: pointer; }
+.brand-wrap:hover { opacity: 0.85; }
+.brand-wrap:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; }
 .brand {
   display: block;
   height: 36px;

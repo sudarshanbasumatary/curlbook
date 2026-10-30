@@ -16,11 +16,12 @@ def build_curl(req: dict, multiline: bool = True) -> str:
     opts = req.get("options") or {}
 
     first = ["curl"]
-    # curl infers POST when data is present, and GET otherwise
-    implied = "POST" if body else "GET"
+    # Always state the method explicitly, except for a plain body-less GET
+    # (curl's default). A GET *with* a body still needs -X GET, since curl
+    # would otherwise switch to POST when it sees --data-raw.
     if method == "HEAD" and not body:
         first.append("-I")
-    elif method != implied:
+    elif method != "GET" or body:
         first.append(f"-X {method}")
     first.append(shell_quote(req.get("url") or ""))
 

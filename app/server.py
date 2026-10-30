@@ -1,7 +1,7 @@
 """curlbook - a tiny HTML Postman-like app backed by a local JSON file."""
 import os
 import time
-from urllib.parse import urlsplit
+from urllib.parse import urlsplit, urlunsplit
 
 import requests
 import urllib3
@@ -17,6 +17,28 @@ urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 STATIC_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static")
 MAX_BODY_BYTES = int(os.environ.get("CURLBOOK_MAX_BODY_BYTES", 10 * 1024 * 1024))
+# When running in Docker, 'localhost' is the container itself (where curlbook's own server
+# listens). If set, loopback hosts in request URLs are redirected to this host instead,
+# e.g. 'host.docker.internal', so requests behave like they do from your terminal.
+LOCALHOST_ALIAS = os.environ.get("CURLBOOK_LOCALHOST_ALIAS", "").strip()
+LOOPBACK_HOSTS = ("localhost", "127.0.0.1", "::1", "0.0.0.0")
+
+
+def rewrite_loopback(url: str):
+    """Return (url_to_connect, original_netloc) — original_netloc is None if not rewritten."""
+    if not LOCALHOST_ALIAS:
+        return url, None
+    parts = urlsplit(url)
+    host = (parts.hostname or "").lower()
+    if host not in LOOPBACK_HOSTS and not host.endswith(".localhost"):
+        return url, None
+    netloc = LOCALHOST_ALIAS
+    if parts.port:
+        netloc += f":{parts.port}"
+    userinfo = parts.netloc.rpartition("@")[0]
+    if userinfo:
+        netloc = f"{userinfo}@{netloc}"
+    return urlunsplit(parts._replace(netloc=netloc)), parts.netloc.rpartition("@")[2]
 
 app = Flask(__name__, static_folder=STATIC_DIR, static_url_path="/static")
 
@@ -258,11 +280,18 @@ def api_send():
     sent_curl = build_curl(resolved)
     result = {"missing": missing, "sentCurl": sent_curl, "resolvedUrl": url}
 
+    connect_url, original_host = rewrite_loopback(url)
+    if original_host is not None:
+        # keep the Host header the target would see from a terminal curl
+        if not any(k.lower() == "host" for k in headers):
+            headers["Host"] = original_host
+        result["rewrittenUrl"] = connect_url
+
     started = time.perf_counter()
     try:
         resp = requests.request(
             resolved["method"],
-            url,
+            connect_url,
             headers=headers,
             data=resolved["body"].encode("utf-8") if resolved["body"] else None,
             verify=not opts.get("insecure"),
@@ -285,7 +314,12 @@ def api_send():
     except requests.exceptions.RequestException as e:
         result["error"] = f"{type(e).__name__}: {e}"
         host = (urlsplit(url).hostname or "").lower()
-        if isinstance(e, requests.exceptions.ConnectionError) and host in ("localhost", "127.0.0.1", "::1", "0.0.0.0"):
+        if isinstance(e, requests.exceptions.ConnectionError) and original_host is not None:
+            result["error"] += (
+                f" — Hint: '{original_host}' was sent to your machine via {LOCALHOST_ALIAS}. "
+                "Check the service is running there (on Linux it must listen on 0.0.0.0, not 127.0.0.1)."
+            )
+        elif isinstance(e, requests.exceptions.ConnectionError) and host in LOOPBACK_HOSTS:
             result["error"] += (
                 " — Hint: inside Docker, 'localhost' is the container itself. "
                 "Use http://host.docker.internal:<port> to reach services on your machine."
@@ -328,7 +362,7 @@ def api_send():
         "headers": resp_headers,
         "body": body_text,
         "contentType": resp.headers.get("Content-Type", ""),
-        "finalUrl": resp.url,
+        "finalUrl": url if resp.url == connect_url else resp.url,
         "extractions": extractions,
         "globals": globals_,
     })
