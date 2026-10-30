@@ -383,6 +383,48 @@ button.tag:hover { background: color-mix(in srgb, var(--tag) 24%, transparent); 
   outline: 1px solid color-mix(in srgb, var(--accent) 45%, transparent);
 }
 
+/* ---------- history ---------- */
+.history { display: grid; grid-template-columns: minmax(220px, 300px) 1fr; gap: 12px; align-items: start; }
+.history-list {
+  list-style: none; margin: 0; padding: 4px; max-height: 60vh; overflow-y: auto;
+  background: var(--bg2); border: 1px solid var(--border); border-radius: 6px;
+}
+.history-item { padding: 6px 8px; border-radius: 5px; cursor: pointer; outline: none; }
+.history-item + .history-item { margin-top: 2px; }
+.history-item:hover, .history-item:focus-visible { background: var(--bg3); }
+.history-item.active { background: var(--active-bg); box-shadow: inset 2px 0 0 var(--accent); }
+.history-msg { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.history-meta { display: flex; align-items: center; gap: 6px; margin-top: 2px; }
+.history-meta code { font-size: 11px; padding: 0 4px; }
+.hist-badge {
+  --tint: var(--muted);
+  font-size: 10.5px; padding: 0 6px; border-radius: 8px; line-height: 16px;
+  color: var(--tint); background: color-mix(in srgb, var(--tint) 12%, transparent);
+}
+.hist-badge.current { --tint: var(--ok); }
+.hist-badge.deleted { --tint: var(--err); }
+.history-detail { min-width: 0; }
+.history-detail .code { white-space: pre; word-break: normal; }
+
+.seg { display: inline-flex; border: 1px solid var(--border); border-radius: 6px; overflow: hidden; }
+.seg-btn {
+  background: var(--bg3); color: var(--muted); border: none; font: inherit; font-size: 12px;
+  padding: 3px 10px; cursor: pointer;
+}
+.seg-btn + .seg-btn { border-left: 1px solid var(--border); }
+.seg-btn:hover { color: var(--text); }
+.seg-btn.active { background: var(--input-bg); color: var(--text); font-weight: 600; }
+
+.diff .d-add { color: var(--ok); background: color-mix(in srgb, var(--ok) 10%, transparent); display: inline-block; min-width: 100%; }
+.diff .d-del { color: var(--err); background: color-mix(in srgb, var(--err) 10%, transparent); display: inline-block; min-width: 100%; }
+.diff .d-hunk { color: var(--info); }
+.diff .d-meta { color: var(--muted); font-weight: 600; }
+
+.sidebar-foot { align-self: stretch; color: var(--muted); }
+.sidebar-foot:hover { color: var(--text); }
+.deleted-table td { vertical-align: top; padding: 6px 4px; border-bottom: 1px solid var(--border); }
+.deleted-url { max-width: 420px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; margin-top: 2px; }
+
 /* ---------- modals ---------- */
 .modal {
   position: fixed; inset: 0; background: var(--overlay);

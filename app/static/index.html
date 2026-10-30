@@ -41,6 +41,7 @@
     <aside class="sidebar">
       <input id="search" class="input" type="search" placeholder="Search…  (tag:name for tags)" title="Words match name, URL, method and tags. Use tag:name (or #name) to filter by tag. Multiple terms must all match." />
       <div id="collections" class="collections"></div>
+      <button id="btn-deleted" class="btn btn-small sidebar-foot hidden" title="Restore requests you deleted">Recently deleted</button>
     </aside>
 
     <!-- Main -->
@@ -92,6 +93,7 @@
           <button class="tab" data-tab="options">Options</button>
           <button class="tab" data-tab="extract">Extract <span id="extract-count" class="pill"></span></button>
           <button class="tab" data-tab="raw">Raw curl</button>
+          <button class="tab" data-tab="history" id="tab-history">History <span id="history-count" class="pill"></span></button>
         </nav>
 
         <div class="tab-panels" data-tabgroup="req">
@@ -139,6 +141,25 @@
               <button id="btn-raw-copy-resolved" class="btn btn-small">Copy with variables resolved</button>
             </div>
             <textarea id="req-raw" class="input textarea mono" spellcheck="false" placeholder="Paste or edit a curl command here, then click 'Apply to form'"></textarea>
+          </div>
+
+          <div class="tab-panel" data-panel="history">
+            <p id="history-empty" class="muted small hidden"></p>
+            <div id="history-view" class="history hidden">
+              <ul id="history-list" class="history-list"></ul>
+              <div class="history-detail">
+                <div class="row gap toolbar">
+                  <div class="seg" id="history-against" role="group" aria-label="Compare">
+                    <button type="button" class="seg-btn active" data-against="prev" title="What this version changed">Changes in this version</button>
+                    <button type="button" class="seg-btn" data-against="current" title="This version compared with the current saved request">Compare with current</button>
+                  </div>
+                  <div class="spacer"></div>
+                  <button id="btn-history-copy" class="btn btn-small">Copy curl</button>
+                  <button id="btn-history-restore" class="btn btn-small btn-accent" title="Load this version into the editor; save to make it current">Restore this version</button>
+                </div>
+                <pre id="history-diff" class="code mono diff"></pre>
+              </div>
+            </div>
           </div>
         </div>
 
@@ -221,6 +242,21 @@
         <button class="btn" data-close>Cancel</button>
         <button id="btn-globals-save" class="btn btn-accent">Save</button>
       </div>
+    </div>
+  </div>
+
+  <!-- Recently deleted modal -->
+  <div id="modal-deleted" class="modal hidden">
+    <div class="modal-card wide">
+      <div class="modal-head"><h3>Recently deleted</h3><button class="icon-btn" data-close>&times;</button></div>
+      <p class="muted small">Deleted requests are kept in the git history. Restoring brings a request back with its full version history.</p>
+      <div class="globals-scroll">
+        <table class="kv-table deleted-table">
+          <thead><tr><th>Request</th><th>Collection</th><th>Deleted</th><th></th></tr></thead>
+          <tbody id="deleted-body"></tbody>
+        </table>
+      </div>
+      <div class="modal-foot"><button class="btn" data-close>Close</button></div>
     </div>
   </div>
 

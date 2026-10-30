@@ -62,8 +62,26 @@ cd app && CURLBOOK_DATA_DIR=../data python server.py
   (after substitution).
 - **Light / dark theme**: light by default; toggle dark mode with the moon/sun button in the top bar
   (remembered per browser).
+- **Version history** (git): every save is committed — see [History](#history).
 
 Keyboard: `Ctrl/Cmd+Enter` send, `Ctrl/Cmd+S` save, `Esc` close dialogs.
+
+## History
+
+Saved requests are versioned in a git repository at `./data/history` (one file per request,
+`requests/<id>.json`). Every create, save, move, duplicate, delete, import and collection rename/delete
+makes a commit with a readable message such as `Update "Login": url, body`; saving without changes makes none.
+
+- **History tab** on each request: list of versions; pick one to see *what that version changed* or
+  *compare it with the current* request as a diff of the curl (plus name, tags, extract rules and disabled
+  headers). *Restore this version* loads it into the editor as unsaved changes — save to make it current,
+  so nothing is ever overwritten. *Copy curl* copies that version's command.
+- **Recently deleted** (bottom of the sidebar): bring back deleted requests, with their history intact.
+- Globals are **not** tracked (they hold tokens and change on every send that extracts values).
+- It's a normal repo: `git -C data/history log --stat` works from your terminal.
+- On startup, hand-edits to `store.json` are recorded as `Sync external changes`.
+- History is best-effort: if git is unavailable or fails, saving still works. Disable it with `CURLBOOK_HISTORY=0`.
+  Running without Docker requires `git` on your `PATH`.
 
 ## Calling services on your host
 
@@ -81,6 +99,8 @@ Tip: keep the base URL in a global such as `{{baseUrl}}` so switching hosts is a
 | `CURLBOOK_DATA_DIR`        | `/data`                | Directory holding `store.json`                 |
 | `CURLBOOK_MAX_BODY_BYTES`  | `10485760`             | Max response body size kept                    |
 | `CURLBOOK_LOCALHOST_ALIAS` | `host.docker.internal` | Host that loopback URLs are redirected to      |
+| `CURLBOOK_HISTORY`         | `1`                    | Set to `0` to disable git version history      |
+| `CURLBOOK_HISTORY_DIR`     | `$CURLBOOK_DATA_DIR/history` | Location of the history git repo         |
 | `PORT`                     | `8080`                 | Listen port inside the container               |
 | `CURLBOOK_PORT`            | `8787`                 | Host port published by compose                 |
 

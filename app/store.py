@@ -5,6 +5,7 @@ import tempfile
 import threading
 import uuid
 
+import history
 from tags import normalize_tags
 
 DATA_DIR = os.environ.get("CURLBOOK_DATA_DIR", "/data")
@@ -110,7 +111,15 @@ def save(data: dict) -> None:
 
 
 class Transaction:
-    """Context manager: load, mutate, save under a lock."""
+    """Context manager: load, mutate, save under a lock.
+
+    If a commit ``message`` is given (or set on the transaction before it exits), the saved
+    requests are also committed to the git history. Leave it unset for changes that should not
+    create history entries (globals, tag colours).
+    """
+
+    def __init__(self, message: str = None):
+        self.message = message
 
     def __enter__(self):
         _lock.acquire()
@@ -125,6 +134,8 @@ class Transaction:
         try:
             if exc_type is None:
                 save(self.data)
+                if self.message:
+                    history.sync(self.data, self.message)
         finally:
             _lock.release()
         return False

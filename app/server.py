@@ -7,6 +7,7 @@ import requests
 import urllib3
 from flask import Flask, jsonify, request, send_from_directory
 
+import history
 import store
 import tags as tagmod
 from curl_builder import build_curl
@@ -87,21 +88,26 @@ def rename_collection(cid):
     name = ((request.json or {}).get("name") or "").strip()
     if not name:
         return bad("Name is required")
-    with store.Transaction() as data:
+    tx = store.Transaction()
+    with tx as data:
         col = store.find_collection(data, cid)
         if not col:
             return bad("Collection not found", 404)
+        tx.message = f'Rename collection "{col["name"]}" → "{name}"'
         col["name"] = name
     return jsonify(col)
 
 
 @app.delete("/api/collections/<cid>")
 def delete_collection(cid):
-    with store.Transaction() as data:
-        before = len(data["collections"])
-        data["collections"] = [c for c in data["collections"] if c["id"] != cid]
-        if len(data["collections"]) == before:
+    tx = store.Transaction()
+    with tx as data:
+        col = store.find_collection(data, cid)
+        if not col:
             return bad("Collection not found", 404)
+        n = len(col["requests"])
+        tx.message = f'Delete collection "{col["name"]}" ({n} request{"s" if n != 1 else ""})'
+        data["collections"] = [c for c in data["collections"] if c["id"] != cid]
         tagmod.sync_tags(data)
     return jsonify({"ok": True})
 
@@ -112,7 +118,7 @@ def create_request():
     cid = payload.get("collectionId")
     req = store.normalize_request(payload.get("request") or {})
     req["id"] = store.new_id()
-    with store.Transaction() as data:
+    with store.Transaction(f'Create "{req["name"]}"') as data:
         col = store.find_collection(data, cid)
         if not col:
             return bad("Collection not found", 404)
@@ -125,12 +131,14 @@ def create_request():
 @app.put("/api/requests/<rid>")
 def update_request(rid):
     payload = request.json or {}
-    with store.Transaction() as data:
+    tx = store.Transaction()
+    with tx as data:
         col, idx, existing = store.find_request(data, rid)
         if not existing:
             return bad("Request not found", 404)
         req = store.normalize_request({**existing, **(payload.get("request") or {})})
         req["id"] = rid
+        changes = history.changed_fields(existing, req)
         target_cid = payload.get("collectionId") or col["id"]
         if target_cid != col["id"]:
             target = store.find_collection(data, target_cid)
@@ -138,8 +146,10 @@ def update_request(rid):
                 return bad("Target collection not found", 404)
             col["requests"].pop(idx)
             target["requests"].append(req)
+            changes.insert(0, f'moved to "{target["name"]}"')
         else:
             col["requests"][idx] = req
+        tx.message = f'Update "{req["name"]}"' + (f": {', '.join(changes)}" if changes else "")
         tagmod.sync_tags(data)
         tag_colors = data["tags"]
     return jsonify({"request": req, "collectionId": target_cid, "tags": tag_colors})
@@ -147,22 +157,26 @@ def update_request(rid):
 
 @app.post("/api/requests/<rid>/duplicate")
 def duplicate_request(rid):
-    with store.Transaction() as data:
+    tx = store.Transaction()
+    with tx as data:
         col, idx, existing = store.find_request(data, rid)
         if not existing:
             return bad("Request not found", 404)
         copy = store.normalize_request({**existing, "name": existing["name"] + " (copy)"})
         copy["id"] = store.new_id()
         col["requests"].insert(idx + 1, copy)
+        tx.message = f'Duplicate "{existing["name"]}"'
     return jsonify({"request": copy, "collectionId": col["id"]}), 201
 
 
 @app.delete("/api/requests/<rid>")
 def delete_request(rid):
-    with store.Transaction() as data:
+    tx = store.Transaction()
+    with tx as data:
         col, idx, existing = store.find_request(data, rid)
         if not existing:
             return bad("Request not found", 404)
+        tx.message = f'Delete "{existing["name"]}"'
         col["requests"].pop(idx)
         tagmod.sync_tags(data)
     return jsonify({"ok": True})
@@ -240,7 +254,7 @@ def api_import():
         req["name"] = name
     req["tags"] = payload.get("tags") or []
     req = store.normalize_request(req)
-    with store.Transaction() as data:
+    with store.Transaction(f'Import "{req["name"]}"') as data:
         col = store.find_collection(data, payload.get("collectionId"))
         if not col:
             if not data["collections"]:
@@ -249,6 +263,81 @@ def api_import():
         col["requests"].append(req)
         tagmod.sync_tags(data)
     return jsonify({"request": req, "collectionId": col["id"], "warnings": warnings}), 201
+
+
+# -------------------------------------------------------------- history ----
+@app.errorhandler(history.HistoryError)
+def _history_err(e):
+    return bad(str(e), 404 if "not found" in str(e) else 400)
+
+
+def _current_record(data, rid):
+    col, _, req = store.find_request(data, rid)
+    return {"collectionId": col["id"], "collectionName": col["name"], "request": req} if req else None
+
+
+@app.get("/api/history")
+def api_history_status():
+    return jsonify({"enabled": history.ENABLED})
+
+
+@app.get("/api/requests/<rid>/history")
+def api_request_history(rid):
+    return jsonify({"enabled": history.ENABLED, "versions": history.versions(rid)})
+
+
+@app.get("/api/requests/<rid>/history/<sha>")
+def api_request_version(rid, sha):
+    """A version plus a diff: 'prev' = what that commit changed; 'current' = version -> current saved."""
+    against = request.args.get("against", "prev")
+    v = history.version(rid, sha)
+    rec = v["record"]
+    short = sha[:7]
+    if against == "current":
+        current = _current_record(store.load(), rid)
+        diff = history.diff(rec, current, f"{short} (this version)", "current" if current else "current (deleted)")
+    else:
+        before = history.record_at(rid, f"{sha}^")
+        after = None if v["deleted"] else rec
+        diff = history.diff(before, after, f"{short}^ (before)" if before else "(new)",
+                            f"{short} (after)" if after else "(deleted)")
+    return jsonify({
+        "sha": sha, "deleted": v["deleted"], "request": rec["request"],
+        "collectionId": rec.get("collectionId"), "collectionName": rec.get("collectionName"),
+        "curl": build_curl(rec["request"]), "diff": diff,
+    })
+
+
+@app.get("/api/history/deleted")
+def api_deleted_requests():
+    data = store.load()
+    present = [r["id"] for c in data["collections"] for r in c["requests"]]
+    return jsonify({"enabled": history.ENABLED, "items": history.deleted_requests(present)})
+
+
+@app.post("/api/history/restore")
+def api_restore_deleted():
+    """Bring back a deleted request with its original id (so its history continues)."""
+    p = request.json or {}
+    rid, sha = str(p.get("id") or ""), str(p.get("sha") or "")
+    v = history.version(rid, sha)
+    rec = v["record"]
+    req = store.normalize_request(rec["request"])
+    req["id"] = rid
+    tx = store.Transaction(f'Restore "{req["name"]}"')
+    with tx as data:
+        if store.find_request(data, rid)[2]:
+            return bad("That request already exists", 409)
+        col = (store.find_collection(data, rec.get("collectionId"))
+               or next((c for c in data["collections"] if c["name"] == rec.get("collectionName")), None))
+        if not col:
+            if not data["collections"]:
+                data["collections"].append({"id": store.new_id(), "name": "Default", "requests": []})
+            col = data["collections"][0]
+        col["requests"].append(req)
+        tagmod.sync_tags(data)
+        tag_colors = data["tags"]
+    return jsonify({"request": req, "collectionId": col["id"], "tags": tag_colors}), 201
 
 
 # ----------------------------------------------------------------- send ----
@@ -379,6 +468,18 @@ def api_extract():
         return jsonify({"ok": True, "value": value})
     except ExtractError as e:
         return jsonify({"ok": False, "error": str(e)})
+
+
+def _init_history():
+    """Create the history repo (snapshotting existing requests) and record any hand-edits."""
+    try:
+        with store._lock:
+            history.startup(store.load())
+    except Exception as e:  # noqa: BLE001 - history must never stop the app from starting
+        app.logger.warning("request history unavailable: %s", e)
+
+
+_init_history()
 
 
 if __name__ == "__main__":

@@ -296,6 +296,8 @@
     clearResponse();
     renderSidebar();
     if (activeTab("req") === "raw") refreshRaw();
+    resetHistory();
+    if (activeTab("req") === "history") loadHistory();
   }
 
   function renderForm() {
@@ -535,6 +537,7 @@
     $$(`.tabs[data-tabgroup="${group}"] .tab`).forEach((t) => t.classList.toggle("active", t.dataset.tab === tab));
     $$(`.tab-panels[data-tabgroup="${group}"] > .tab-panel`).forEach((p) => p.classList.toggle("active", p.dataset.panel === tab));
     if (group === "req" && tab === "raw" && !state.rawDirty) refreshRaw();
+    if (group === "req" && tab === "history") loadHistory();
   }
   $$(".tabs").forEach((nav) => nav.addEventListener("click", (e) => {
     const t = e.target.closest(".tab");
@@ -580,6 +583,159 @@
     } catch (err) { toast("Parse error: " + err.message, "err"); }
   }
 
+  // ------------------------------------------------------------ history --
+  const hist = { enabled: true, rid: null, versions: [], sha: null, against: "prev", detail: null };
+
+  function fmtAgo(iso) {
+    const s = Math.max(0, (Date.now() - new Date(iso).getTime()) / 1000);
+    if (s < 45) return "just now";
+    if (s < 3600) return `${Math.round(s / 60)} min ago`;
+    if (s < 86400) return `${Math.round(s / 3600)} h ago`;
+    if (s < 86400 * 7) return `${Math.round(s / 86400)} d ago`;
+    return new Date(iso).toLocaleDateString();
+  }
+  const fmtFull = (iso) => new Date(iso).toLocaleString();
+
+  function resetHistory() {
+    Object.assign(hist, { rid: null, versions: [], sha: null, detail: null });
+    $("#history-count").textContent = "";
+  }
+
+  function showHistoryMessage(msg) {
+    $("#history-view").classList.add("hidden");
+    $("#history-empty").classList.remove("hidden");
+    $("#history-empty").textContent = msg;
+  }
+
+  async function loadHistory() {
+    if (!state.current) return;
+    if (!hist.enabled) return showHistoryMessage("History is disabled (git is not available or CURLBOOK_HISTORY=0).");
+    const rid = state.currentId;
+    if (!rid) return showHistoryMessage("Save this request to start its history.");
+    try {
+      const { versions } = await api("GET", `/api/requests/${rid}/history`);
+      if (state.currentId !== rid) return; // switched requests meanwhile
+      hist.rid = rid;
+      hist.versions = versions;
+      $("#history-count").textContent = versions.length || "";
+      if (!versions.length) return showHistoryMessage("No history yet — it starts with the next save.");
+      $("#history-empty").classList.add("hidden");
+      $("#history-view").classList.remove("hidden");
+      if (!versions.some((v) => v.sha === hist.sha)) hist.sha = versions[0].sha;
+      renderHistoryList();
+      await selectVersion(hist.sha);
+    } catch (err) { showHistoryMessage("Could not load history: " + err.message); }
+  }
+
+  function renderHistoryList() {
+    $("#history-list").innerHTML = hist.versions.map((v, i) => `
+      <li class="history-item ${v.sha === hist.sha ? "active" : ""}" data-sha="${esc(v.sha)}" tabindex="0">
+        <div class="history-msg">${esc(v.message)}</div>
+        <div class="history-meta muted small">
+          <span title="${esc(fmtFull(v.date))}">${esc(fmtAgo(v.date))}</span>
+          <code>${esc(v.sha.slice(0, 7))}</code>
+          ${i === 0 && v.kind !== "delete" ? `<span class="hist-badge current">current</span>` : ""}
+          ${v.kind === "add" ? `<span class="hist-badge">created</span>` : ""}
+          ${v.kind === "delete" ? `<span class="hist-badge deleted">deleted</span>` : ""}
+        </div>
+      </li>`).join("");
+  }
+
+  function renderDiff(text) {
+    if (!text.trim()) return `<span class="muted">No differences.</span>`;
+    return text.split("\n").map((l) => {
+      const cls = l.startsWith("+++") || l.startsWith("---") ? "d-meta"
+        : l.startsWith("@@") ? "d-hunk" : l.startsWith("+") ? "d-add" : l.startsWith("-") ? "d-del" : "d-ctx";
+      return `<span class="${cls}">${esc(l) || " "}</span>`;
+    }).join("\n");
+  }
+
+  async function selectVersion(sha) {
+    hist.sha = sha;
+    $$("#history-list .history-item").forEach((li) => li.classList.toggle("active", li.dataset.sha === sha));
+    $$("#history-against .seg-btn").forEach((b) => b.classList.toggle("active", b.dataset.against === hist.against));
+    const rid = hist.rid;
+    try {
+      const d = await api("GET", `/api/requests/${rid}/history/${sha}?against=${hist.against}`);
+      if (hist.rid !== rid || hist.sha !== sha) return;
+      hist.detail = d;
+      $("#history-diff").innerHTML = renderDiff(d.diff);
+    } catch (err) {
+      $("#history-diff").innerHTML = `<span class="err-text">${esc(err.message)}</span>`;
+    }
+  }
+
+  $("#history-list").addEventListener("click", (e) => {
+    const li = e.target.closest("[data-sha]");
+    if (li) selectVersion(li.dataset.sha);
+  });
+  $("#history-list").addEventListener("keydown", (e) => {
+    const li = e.target.closest("[data-sha]");
+    if (!li) return;
+    if (e.key === "Enter" || e.key === " ") { e.preventDefault(); selectVersion(li.dataset.sha); }
+    else if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+      e.preventDefault();
+      const next = e.key === "ArrowDown" ? li.nextElementSibling : li.previousElementSibling;
+      if (next) { next.focus(); selectVersion(next.dataset.sha); }
+    }
+  });
+  $("#history-against").addEventListener("click", (e) => {
+    const b = e.target.closest("[data-against]");
+    if (!b || !hist.sha) return;
+    hist.against = b.dataset.against;
+    selectVersion(hist.sha);
+  });
+  $("#btn-history-copy").addEventListener("click", () => { if (hist.detail) copyText(hist.detail.curl); });
+  $("#btn-history-restore").addEventListener("click", () => {
+    const d = hist.detail;
+    if (!d || !state.current || hist.rid !== state.currentId) return;
+    if (!confirmDiscard()) return;
+    const r = clone(d.request);
+    Object.assign(state.current, {
+      name: r.name, method: r.method, url: r.url, headers: r.headers || [], body: r.body || "",
+      options: r.options || state.current.options, extractions: r.extractions || [], tags: r.tags || [],
+    });
+    renderForm();
+    setDirty(true);
+    state.rawDirty = false;
+    toast(`Version ${d.sha.slice(0, 7)} loaded into the editor — Save to make it current`, "ok", 4000);
+  });
+
+  // recently deleted
+  async function openDeleted() {
+    $("#deleted-body").innerHTML = `<tr><td colspan="4" class="muted small">Loading…</td></tr>`;
+    openModal("#modal-deleted");
+    try {
+      const { items } = await api("GET", "/api/history/deleted");
+      $("#deleted-body").innerHTML = items.map((x) => `
+        <tr data-id="${esc(x.id)}" data-sha="${esc(x.sha)}">
+          <td><span class="method m-${esc(x.method)}">${esc(x.method)}</span> <strong>${esc(x.name)}</strong>
+              <div class="mono small muted deleted-url" title="${esc(x.url)}">${esc(x.url)}</div></td>
+          <td>${esc(x.collectionName)}</td>
+          <td class="small" title="${esc(fmtFull(x.date))}">${esc(fmtAgo(x.date))}</td>
+          <td><button class="btn btn-small btn-accent" data-restore>Restore</button></td>
+        </tr>`).join("") || `<tr><td colspan="4" class="muted small">Nothing deleted yet.</td></tr>`;
+    } catch (err) {
+      $("#deleted-body").innerHTML = `<tr><td colspan="4" class="err-text small">${esc(err.message)}</td></tr>`;
+    }
+  }
+  $("#btn-deleted").addEventListener("click", openDeleted);
+  $("#deleted-body").addEventListener("click", async (e) => {
+    const btn = e.target.closest("[data-restore]");
+    if (!btn) return;
+    const tr = btn.closest("tr");
+    btn.disabled = true;
+    try {
+      const res = await api("POST", "/api/history/restore", { id: tr.dataset.id, sha: tr.dataset.sha });
+      await reloadStore();
+      state.collapsed.delete(res.collectionId); saveCollapsed(); renderSidebar();
+      tr.remove();
+      if (!$("#deleted-body tr")) $("#deleted-body").innerHTML = `<tr><td colspan="4" class="muted small">Nothing deleted yet.</td></tr>`;
+      toast(`Restored "${res.request.name}"`, "ok");
+      if (confirmDiscard()) { closeModal($("#modal-deleted")); openRequest(res.request.id, true); }
+    } catch (err) { btn.disabled = false; toast("Restore failed: " + err.message, "err"); }
+  });
+
   // --------------------------------------------------------------- save --
   async function save() {
     if (!state.current) return;
@@ -596,6 +752,7 @@
       setDirty(false);
       await reloadStore();
       toast("Saved", "ok", 1500);
+      if (activeTab("req") === "history") { hist.sha = null; loadHistory(); }
     } catch (err) { toast("Save failed: " + err.message, "err"); }
   }
   $("#btn-save").addEventListener("click", save);
@@ -897,4 +1054,9 @@
 
   // ---------------------------------------------------------------- init --
   reloadStore().catch((err) => toast("Failed to load store: " + err.message, "err", 8000));
+  api("GET", "/api/history").then(({ enabled }) => {
+    hist.enabled = enabled;
+    $("#tab-history").classList.toggle("hidden", !enabled);
+    $("#btn-deleted").classList.toggle("hidden", !enabled);
+  }).catch(() => { /* older server: leave defaults */ });
 })();
